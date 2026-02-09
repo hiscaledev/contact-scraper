@@ -1,16 +1,37 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from scraper.scraper import scrape_website
-
-app = FastAPI()
-
-
-@app.get("/")
-def root():
-    return {"message": "Contact Scraper API is running"}
+"""Contact Scraper API - Main application entry point."""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import get_settings
+from app.api.router import api_router
 
 
-@app.get("/scrap")
-def scrap(website: str = Query(...)):
-    result = scrape_website(website)
-    return JSONResponse(content=result or {"error": "Could not scrape site"})
+settings = get_settings()
+
+app = FastAPI(
+    title=settings.app_name,
+    description="API for scraping contact information from websites",
+    version="1.0.0",
+    debug=settings.debug
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routes
+app.include_router(api_router)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.debug
+    )

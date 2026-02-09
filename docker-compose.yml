@@ -1,4 +1,13 @@
 services:
+  redis:
+    image: redis:8.4.0-alpine
+    container_name: contact-scraper-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
   app:
     build:
       context: .
@@ -10,3 +19,16 @@ services:
       - .:/app 
     environment:
       PYTHONUNBUFFERED: 1
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      API_KEYS: ${API_KEYS}
+      DEBUG: ${DEBUG:-False}
+    env_file:
+      - .env
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:
