@@ -1,13 +1,11 @@
 """CSV processing API routes."""
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import FileResponse
-from pathlib import Path
-import uuid
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query
 from app.schemas.csv import CSVUploadResponse, JobStatus, JobError
-from app.services.csv_service import start_csv_processing, get_csv_path
-from app.core.database import get_job_status
+from app.services.csv_service import start_csv_processing
+from app.core.database import get_job_status, get_all_jobs
+from app.services.storage_service import get_public_url
 from app.core.auth import verify_api_key
-from typing import Optional
+from typing import Optional, List
 
 
 router = APIRouter()
@@ -32,7 +30,8 @@ async def upload_csv(
     Upload a CSV file for batch processing.
     
     The CSV file must contain a column with website URLs (default: 'website').
-    Processing happens in the background, and you can track progress using the job_id.
+    Processing happens in the background with max 2 concurrent jobs.
+    Files are stored in Supabase storage.
     
     Args:
         file: CSV file to upload
@@ -50,22 +49,25 @@ async def upload_csv(
         )
     
     try:
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())
-        
         # Read file content
         content = await file.read()
         
-        # Start background processing
-        start_csv_processing(job_id, content, website_column)
+        # Start background processing with worker pool (returns integer job ID)
+        job_id = start_csv_processing(content, file.filename, website_column)
+        
+        if not job_id:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create job"
+            )
         
         # Get initial job status to get total rows
         job_data = get_job_status(job_id)
         total_rows = job_data.get("total_rows", 0) if job_data else 0
         
         return CSVUploadResponse(
-            job_id=job_id,
-            message="CSV uploaded successfully. Processing started.",
+            job_id=str(job_id),  # Convert to string for API response
+            message="CSV uploaded successfully. Processing queued.",
             total_rows=total_rows,
             status="queued"
         )
@@ -85,14 +87,14 @@ async def upload_csv(
     description="Check the status and progress of a CSV processing job"
 )
 async def get_job(
-    job_id: str,
+    job_id: int,
     api_key: str = Depends(verify_api_key)
 ):
     """
     Get the status of a background job.
     
     Args:
-        job_id: Unique job identifier from upload response
+        job_id: Unique job identifier (integer) from upload response
         api_key: API key for authentication
         
     Returns:
@@ -103,7 +105,7 @@ async def get_job(
     if not job_data:
         raise HTTPException(
             status_code=404,
-            detail="Job not found or expired"
+            detail="Job not found"
         )
     
     # Calculate progress percentage
@@ -117,7 +119,7 @@ async def get_job(
         download_url = f"/csv/download/{job_id}"
     
     return JobStatus(
-        job_id=job_data["job_id"],
+        job_id=str(job_data["id"]),  # Convert integer ID to string for response
         status=job_data["status"],
         total_rows=total,
         processed_rows=processed,
@@ -133,22 +135,22 @@ async def get_job(
 @router.get(
     "/download/{job_id}",
     tags=["CSV Processing"],
-    summary="Download processed CSV",
-    description="Download the processed CSV file with contact information"
+    summary="Get download URL for processed CSV",
+    description="Get a signed URL to download the processed CSV file with contact information"
 )
 async def download_csv(
-    job_id: str,
+    job_id: int,
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Download the processed CSV file.
+    Get a signed URL to download the processed CSV file from Supabase storage.
     
     Args:
-        job_id: Unique job identifier
+        job_id: Unique job identifier (integer)
         api_key: API key for authentication
         
     Returns:
-        CSV file with scraped contact information
+        JSON with signed URL that expires in 1 hour
     """
     # Check if job exists and is completed
     job_data = get_job_status(job_id)
@@ -156,7 +158,7 @@ async def download_csv(
     if not job_data:
         raise HTTPException(
             status_code=404,
-            detail="Job not found or expired"
+            detail="Job not found"
         )
     
     if job_data.get("status") != "completed":
@@ -165,17 +167,79 @@ async def download_csv(
             detail=f"Job is not completed yet. Current status: {job_data.get('status')}"
         )
     
-    # Get file path
-    output_path = get_csv_path(job_id, processed=True)
-    
-    if not output_path.exists():
+    # Get output path from job data
+    output_path = job_data.get("output_path")
+    if not output_path:
         raise HTTPException(
             status_code=404,
-            detail="Processed file not found"
+            detail="Output file path not found in job data"
         )
     
-    return FileResponse(
-        path=output_path,
-        media_type="text/csv",
-        filename=f"contacts_{job_id}.csv"
-    )
+    # Get signed URL from Supabase storage
+    signed_url = get_public_url(output_path)
+    
+    if not signed_url:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate download URL"
+        )
+    
+    return {
+        "job_id": str(job_id),
+        "download_url": signed_url,
+        "expires_in": "1 hour",
+        "filename": f"contacts_{job_id}.csv"
+    }
+
+
+@router.get(
+    "/jobs",
+    response_model=List[JobStatus],
+    tags=["CSV Processing"],
+    summary="Get all jobs",
+    description="Get all CSV processing jobs with optional status filter"
+)
+async def get_jobs_list(
+    status: Optional[str] = Query(None, description="Filter by status (queued, processing, completed, failed)"),
+    limit: int = Query(50, description="Maximum number of jobs to return", ge=1, le=100),
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get all jobs with optional filtering.
+    
+    Args:
+        status: Optional status filter
+        limit: Maximum number of jobs to return (1-100)
+        api_key: API key for authentication
+        
+    Returns:
+        List of JobStatus objects
+    """
+    jobs = get_all_jobs(status, limit)
+    
+    # Convert to JobStatus format
+    result = []
+    for job_data in jobs:
+        total = job_data.get("total_rows", 0)
+        processed = job_data.get("processed_rows", 0)
+        progress = (processed / total * 100) if total > 0 else 0
+        
+        job_id = job_data["id"]  # Get integer ID
+        download_url = None
+        if job_data.get("status") == "completed":
+            download_url = f"/csv/download/{job_id}"
+        
+        result.append(JobStatus(
+            job_id=str(job_id),  # Convert to string for API response
+            status=job_data["status"],
+            total_rows=total,
+            processed_rows=processed,
+            failed_rows=job_data.get("failed_rows", 0),
+            progress_percentage=round(progress, 2),
+            created_at=job_data.get("created_at"),
+            completed_at=job_data.get("completed_at"),
+            error=job_data.get("error"),
+            download_url=download_url
+        ))
+    
+    return result

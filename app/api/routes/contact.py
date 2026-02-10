@@ -25,7 +25,7 @@ def health_check():
     response_model=Union[ContactInfo, ContactErrorResponse],
     tags=["Scraping"],
     summary="Scrape website for contact information",
-    description="Extract email addresses and phone numbers from a website"
+    description="Extract email addresses, phone numbers, and LinkedIn URLs from a website"
 )
 def scrape_contact(
     website: str = Query(
@@ -33,25 +33,30 @@ def scrape_contact(
         description="Website URL to scrape for contact information",
         example="https://example.com"
     ),
+    validate_linkedin: bool = Query(
+        default=False,
+        description="Whether to use AI to validate LinkedIn URLs (default: False)"
+    ),
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Scrape a website for contact information.
+    Scrape a website for contact information including LinkedIn URLs.
     
     This endpoint:
     - Requires a valid API key in X-API-Key header
     - Normalizes the URL
     - Checks cache for existing data
-    - Scrapes homepage and contact page
-    - Uses AI to validate contacts
-    - Returns emails and phone numbers
+    - Scrapes homepage and contact page for emails, phones, and LinkedIn URLs
+    - Uses AI to validate contacts (LinkedIn validation optional)
+    - Returns emails, phone numbers, and LinkedIn URLs
     
     Args:
         website: The URL of the website to scrape
+        validate_linkedin: Whether to use AI to validate LinkedIn URLs (default: False)
         api_key: API key for authentication (from X-API-Key header)
         
     Returns:
         ContactInfo with scraped data or ContactErrorResponse on failure
     """
-    result = scrape_website(website)
+    result = scrape_website(website, validate_linkedin=validate_linkedin)
     return result

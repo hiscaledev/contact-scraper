@@ -51,22 +51,59 @@ If no contact page is found, return null.
     return None
 
 
-def validate_contacts(emails: list[str], phones: list[str]) -> dict[str, list[str]]:
+def validate_contacts(
+    emails: list[str], 
+    phones: list[str],
+    linkedin_urls: Optional[dict[str, list[str]]] = None,
+    validate_linkedin: bool = False
+) -> dict[str, list[str]]:
     """
-    Validate extracted emails and phones using GPT.
+    Validate extracted emails, phones, and optionally LinkedIn URLs using GPT.
     
     Args:
         emails: List of extracted email addresses
         phones: List of extracted phone numbers
+        linkedin_urls: Dictionary with 'company' and 'personal' LinkedIn URLs
+        validate_linkedin: Whether to use AI to validate LinkedIn URLs
         
     Returns:
-        Dictionary with 'valid_email' and 'valid_phones' keys containing validated lists
+        Dictionary with 'valid_email', 'valid_phones', and 'valid_linkedin_urls' keys
     """
     # Deduplicate and normalize
     emails = list(set([e.strip().lower() for e in emails]))
     phones = list(set([p.strip() for p in phones]))
 
-    prompt = f"""Validate the following extracted emails and phone numbers. 
+    # Build prompt based on whether LinkedIn validation is requested
+    if validate_linkedin and linkedin_urls:
+        prompt = f"""Validate the following extracted contact information. 
+Return ONLY valid contact information in JSON format.
+
+Emails: {json.dumps(emails, indent=2)}
+Phones: {json.dumps(phones, indent=2)}
+LinkedIn URLs: {json.dumps(linkedin_urls, indent=2)}
+
+Return ONLY this JSON structure with no additional text:
+{{ 
+  "valid_email": ["email1@domain.com", "email2@domain.com"], 
+  "valid_phones": ["+1 202 555 0185", "123-456-7890"],
+  "valid_linkedin_urls": {{
+    "company": ["https://linkedin.com/company/example"],
+    "personal": ["https://linkedin.com/in/john-doe"]
+  }}
+}}
+
+For phone numbers:
+- Include numbers that look like real phone numbers (7-15 digits)
+- Preserve formatting including "+" if present
+- Prefer international numbers first
+
+For LinkedIn URLs:
+- Only include valid, accessible LinkedIn URLs
+- Remove broken or invalid URLs
+- Keep company pages separate from personal profiles
+"""
+    else:
+        prompt = f"""Validate the following extracted emails and phone numbers. 
 Return ONLY valid contact information in JSON format.
 
 Emails: {json.dumps(emails, indent=2)}
@@ -91,8 +128,18 @@ For phone numbers:
             temperature=0,
         )
         
-        return json.loads(response.choices[0].message.content.strip())
+        validated = json.loads(response.choices[0].message.content.strip())
+        
+        # If LinkedIn validation was disabled but URLs were provided, add them back without validation
+        if not validate_linkedin and linkedin_urls:
+            validated["valid_linkedin_urls"] = linkedin_urls
+            
+        return validated
         
     except Exception as e:
         print(f"[!] Error validating contacts: {e}")
-        return {"valid_email": [], "valid_phones": []}
+        result = {"valid_email": [], "valid_phones": []}
+        if linkedin_urls:
+            result["valid_linkedin_urls"] = linkedin_urls
+        return result
+

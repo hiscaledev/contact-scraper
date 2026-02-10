@@ -6,7 +6,16 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: >
+      sh -c '
+      if [ -n "$${REDIS_PASSWORD}" ]; then
+        redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+      else
+        redis-server --appendonly yes
+      fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
   app:
     build:
@@ -18,13 +27,31 @@ services:
     volumes:
       - .:/app 
     environment:
+      # Python Settings
       PYTHONUNBUFFERED: 1
+      
+      # Redis Settings (override for Docker network)
       REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      CACHE_TTL: ${CACHE_TTL:-86400}
+      
+      # API Security
       API_KEYS: ${API_KEYS}
+      
+      # OpenAI Settings
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      
+      # Supabase Settings
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+      SUPABASE_BUCKET: ${SUPABASE_BUCKET:-contact-scraper}
+      
+      # Application Settings
       DEBUG: ${DEBUG:-False}
+      MAX_WORKERS: ${MAX_WORKERS:-2}
     env_file:
       - .env
     depends_on:

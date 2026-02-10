@@ -16,10 +16,20 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
+    redis_password: str = ""  # Optional Redis password
+    cache_ttl: int = 86400  # Cache TTL in seconds (default: 24 hours)
     
     # OpenAI Settings
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
+    
+    # Supabase Settings
+    supabase_url: str = ""
+    supabase_key: str = ""
+    supabase_bucket: str = "contact-scraper"
+    
+    # Worker Pool Settings
+    max_workers: int = 2  # Maximum concurrent jobs
     
     class Config:
         env_file = ".env"

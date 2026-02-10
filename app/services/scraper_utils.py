@@ -118,3 +118,51 @@ def extract_links(html: str, base_url: str) -> list[str]:
             links.append(href)
             
     return list(set(links))
+
+
+def extract_linkedin_urls(html: str) -> dict[str, list[str]]:
+    """
+    Extract LinkedIn URLs from HTML content.
+    Prioritizes company pages over personal profiles.
+    
+    Args:
+        html: HTML content
+        
+    Returns:
+        Dictionary with 'company' and 'personal' keys containing lists of LinkedIn URLs
+    """
+    company_urls = []
+    personal_urls = []
+    
+    # Regex patterns for LinkedIn URLs
+    company_pattern = r'https?://(?:www\.)?linkedin\.com/company/[a-zA-Z0-9_-]+'
+    personal_pattern = r'https?://(?:www\.)?linkedin\.com/in/[a-zA-Z0-9_-]+'
+    
+    # Find all LinkedIn URLs in HTML (including href attributes and plain text)
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # Extract from href attributes
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "linkedin.com/company/" in href:
+            match = re.search(company_pattern, href)
+            if match:
+                company_urls.append(match.group(0))
+        elif "linkedin.com/in/" in href:
+            match = re.search(personal_pattern, href)
+            if match:
+                personal_urls.append(match.group(0))
+    
+    # Extract from plain text
+    text_content = str(soup)
+    company_urls.extend(re.findall(company_pattern, text_content))
+    personal_urls.extend(re.findall(personal_pattern, text_content))
+    
+    # Remove duplicates and normalize
+    company_urls = list(set(url.rstrip('/') for url in company_urls))
+    personal_urls = list(set(url.rstrip('/') for url in personal_urls))
+    
+    return {
+        "company": company_urls,
+        "personal": personal_urls
+    }

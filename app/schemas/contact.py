@@ -20,6 +20,10 @@ class ContactInfo(BaseModel):
     website: str = Field(..., description="The normalized website URL")
     emails: list[str] = Field(default_factory=list, description="List of email addresses found")
     phones: list[str] = Field(default_factory=list, description="List of phone numbers found")
+    linkedin_urls: dict[str, list[str]] = Field(
+        default_factory=lambda: {"company": [], "personal": []},
+        description="LinkedIn URLs categorized by type (company/personal)"
+    )
     status: str = Field(..., description="Status of the scraping operation")
     
     class Config:
@@ -28,6 +32,10 @@ class ContactInfo(BaseModel):
                 "website": "http://example.com",
                 "emails": ["contact@example.com", "info@example.com"],
                 "phones": ["+1-555-0100", "+1-555-0101"],
+                "linkedin_urls": {
+                    "company": ["https://linkedin.com/company/example"],
+                    "personal": ["https://linkedin.com/in/john-doe"]
+                },
                 "status": "success"
             }
         }
