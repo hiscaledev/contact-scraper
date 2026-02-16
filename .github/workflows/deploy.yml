@@ -82,25 +82,11 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" bash << 'ENDSSH'
-            set -e
-            cd "$PROJECT_DIR"
-            
-            # Pull latest images (ignore failures for custom builds)
-            docker compose pull || true
-            
-            # Build and start services
-            docker compose up -d --build
-            
-            # Clean up old images and containers
-            docker image prune -af --filter "until=24h" || true
-            docker container prune -f || true
-            
-            echo "Deployment complete. Running containers in this project:"
-            docker compose ps
-          ENDSSH
-        env:
-          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose pull || true"
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose down"
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose up -d --build --force-recreate"
+          ssh "$VPS_USER@$VPS_HOST" "docker image prune -f || true"
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps"
 
       - name: Verify deployment
         env:
@@ -108,32 +94,8 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" bash << 'ENDSSH'
-            set -e
-            cd "$PROJECT_DIR"
-            
-            # Wait for services to start
-            echo "Waiting for services to start..."
-            sleep 15
-            
-            # Check if containers are running
-            echo "Checking container status..."
-            docker compose ps
-            
-            # Verify both containers are up
-            if ! docker compose ps | grep -q "contact-scraper-v2.*Up"; then
-              echo "Error: App container is not running"
-              docker compose logs app
-              exit 1
-            fi
-            
-            if ! docker compose ps | grep -q "contact-scraper-redis-v2.*Up"; then
-              echo "Error: Redis container is not running"
-              docker compose logs redis
-              exit 1
-            fi
-            
-            echo "Deployment verified successfully!"
-          ENDSSH
-        env:
-          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+          sleep 15
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps"
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps | grep -q 'contact-scraper-v2.*Up' && echo 'App container is running' || (echo 'Error: App container is not running' && docker compose logs app && exit 1)"
+          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps | grep -q 'contact-scraper-redis-v2.*Up' && echo 'Redis container is running' || (echo 'Error: Redis container is not running' && docker compose logs redis && exit 1)"
+          echo "Deployment verified successfully!"
