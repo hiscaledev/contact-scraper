@@ -64,8 +64,6 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
-
-          # All your secrets
           API_KEYS: ${{ secrets.API_KEYS }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
@@ -77,33 +75,22 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" bash -c "
-            set -e
-            mkdir -p '$PROJECT_DIR'
-            cat > '$PROJECT_DIR/.env' <<'EOF'
-API_KEYS=\"\$API_KEYS\"
-OPENAI_API_KEY=\"\$OPENAI_API_KEY\"
-OPENAI_MODEL=\"\$OPENAI_MODEL\"
-REDIS_PORT=\"\$REDIS_PORT\"
-REDIS_DB=\"\$REDIS_DB\"
-DEBUG=\"\$DEBUG\"
-MAX_WORKERS=\"\$MAX_WORKERS\"
-CACHE_TTL=\"\$CACHE_TTL\"
-SUPABASE_URL=\"\$SUPABASE_URL\"
-SUPABASE_KEY=\"\$SUPABASE_KEY\"
-EOF
-            chmod 600 '$PROJECT_DIR/.env'
-          " \
-            API_KEYS="$API_KEYS" \
-            OPENAI_API_KEY="$OPENAI_API_KEY" \
-            OPENAI_MODEL="$OPENAI_MODEL" \
-            REDIS_PORT="$REDIS_PORT" \
-            REDIS_DB="$REDIS_DB" \
-            DEBUG="$DEBUG" \
-            MAX_WORKERS="$MAX_WORKERS" \
-            CACHE_TTL="$CACHE_TTL" \
-            SUPABASE_URL="$SUPABASE_URL" \
-            SUPABASE_KEY="$SUPABASE_KEY"
+          cat > .env.tmp << EOF
+          API_KEYS=$API_KEYS
+          OPENAI_API_KEY=$OPENAI_API_KEY
+          OPENAI_MODEL=$OPENAI_MODEL
+          REDIS_PORT=$REDIS_PORT
+          REDIS_DB=$REDIS_DB
+          DEBUG=$DEBUG
+          MAX_WORKERS=$MAX_WORKERS
+          CACHE_TTL=$CACHE_TTL
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_KEY=$SUPABASE_KEY
+          EOF
+          
+          scp .env.tmp "$VPS_USER@$VPS_HOST:$PROJECT_DIR/.env"
+          ssh "$VPS_USER@$VPS_HOST" "chmod 600 '$PROJECT_DIR/.env'"
+          rm .env.tmp
 
       - name: Deploy with Docker Compose on VPS
         env:
