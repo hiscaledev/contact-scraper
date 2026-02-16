@@ -1,9 +1,9 @@
 services:
   redis:
     image: redis:8.4.0-alpine
-    container_name: contact-scraper-redis
+    container_name: contact-scraper-redis-v2
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     command: >
@@ -21,9 +21,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: contact-scraper
+    container_name: contact-scraper-v2
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - .:/app 
     environment:

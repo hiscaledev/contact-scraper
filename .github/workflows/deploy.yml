@@ -1,0 +1,161 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: CI sanity checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose file
+        run: |
+          docker compose version
+          docker compose -f docker-compose.yml config
+
+      - name: Build app image (sanity)
+        run: docker build -t contact-scraper:ci .
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Add VPS host to known_hosts
+        run: ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: ssh "$VPS_USER@$VPS_HOST" "echo 'SSH connection successful'"
+
+      - name: Sync repository to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" "mkdir -p '$PROJECT_DIR'"
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '__pycache__' \
+            --exclude '.env' \
+            --exclude 'uv.lock' \
+            -e "ssh" \
+            ./ "$VPS_USER@$VPS_HOST:$PROJECT_DIR"
+
+      - name: Create .env file on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+
+          # All your secrets
+          API_KEYS: ${{ secrets.API_KEYS }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT }}
+          REDIS_DB: ${{ secrets.REDIS_DB }}
+          DEBUG: ${{ secrets.DEBUG }}
+          MAX_WORKERS: ${{ secrets.MAX_WORKERS }}
+          CACHE_TTL: ${{ secrets.CACHE_TTL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" bash -c "
+            set -e
+            mkdir -p '$PROJECT_DIR'
+            cat > '$PROJECT_DIR/.env' <<'EOF'
+API_KEYS=\"\$API_KEYS\"
+OPENAI_API_KEY=\"\$OPENAI_API_KEY\"
+OPENAI_MODEL=\"\$OPENAI_MODEL\"
+REDIS_PORT=\"\$REDIS_PORT\"
+REDIS_DB=\"\$REDIS_DB\"
+DEBUG=\"\$DEBUG\"
+MAX_WORKERS=\"\$MAX_WORKERS\"
+CACHE_TTL=\"\$CACHE_TTL\"
+SUPABASE_URL=\"\$SUPABASE_URL\"
+SUPABASE_KEY=\"\$SUPABASE_KEY\"
+EOF
+            chmod 600 '$PROJECT_DIR/.env'
+          " \
+            API_KEYS="$API_KEYS" \
+            OPENAI_API_KEY="$OPENAI_API_KEY" \
+            OPENAI_MODEL="$OPENAI_MODEL" \
+            REDIS_PORT="$REDIS_PORT" \
+            REDIS_DB="$REDIS_DB" \
+            DEBUG="$DEBUG" \
+            MAX_WORKERS="$MAX_WORKERS" \
+            CACHE_TTL="$CACHE_TTL" \
+            SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_KEY="$SUPABASE_KEY"
+
+      - name: Deploy with Docker Compose on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" bash -c '
+            set -e
+            cd "$PROJECT_DIR"
+            
+            # Pull latest images (ignore failures for custom builds)
+            docker compose pull || true
+            
+            # Build and start services
+            docker compose up -d --build
+            
+            # Clean up old images and containers
+            docker image prune -af --filter "until=24h" || true
+            docker container prune -f || true
+          '
+
+      - name: Verify deployment
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" bash -c '
+            set -e
+            cd "$PROJECT_DIR"
+            
+            # Wait for services to start
+            echo "Waiting for services to start..."
+            sleep 15
+            
+            # Check if containers are running
+            echo "Checking container status..."
+            docker compose ps
+            
+            # Verify both containers are up
+            if ! docker compose ps | grep -q "contact-scraper-v2.*Up"; then
+              echo "Error: App container is not running"
+              docker compose logs app
+              exit 1
+            fi
+            
+            if ! docker compose ps | grep -q "contact-scraper-redis-v2.*Up"; then
+              echo "Error: Redis container is not running"
+              docker compose logs redis
+              exit 1
+            fi
+            
+            echo "Deployment verified successfully!"
+          '
