@@ -39,7 +39,6 @@ jobs:
             --exclude '.git' \
             --exclude '__pycache__' \
             --exclude '.env' \
-            --exclude 'uv.lock' \
             -e "ssh" \
             ./ "$VPS_USER@$VPS_HOST:$PROJECT_DIR"
 
