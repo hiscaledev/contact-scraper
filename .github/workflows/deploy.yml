@@ -82,7 +82,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" bash -c '
+          ssh "$VPS_USER@$VPS_HOST" bash << 'ENDSSH'
             set -e
             cd "$PROJECT_DIR"
             
@@ -95,7 +95,12 @@ jobs:
             # Clean up old images and containers
             docker image prune -af --filter "until=24h" || true
             docker container prune -f || true
-          '
+            
+            echo "Deployment complete. Running containers in this project:"
+            docker compose ps
+          ENDSSH
+        env:
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
 
       - name: Verify deployment
         env:
@@ -103,7 +108,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" bash -c '
+          ssh "$VPS_USER@$VPS_HOST" bash << 'ENDSSH'
             set -e
             cd "$PROJECT_DIR"
             
@@ -129,4 +134,6 @@ jobs:
             fi
             
             echo "Deployment verified successfully!"
-          '
+          ENDSSH
+        env:
+          PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
