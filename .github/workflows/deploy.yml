@@ -93,8 +93,32 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           PROJECT_DIR: ${{ secrets.PROJECT_DIR }}
         run: |
-          sleep 15
-          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps"
-          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps | grep -q 'contact-scraper-v2.*Up' && echo 'App container is running' || (echo 'Error: App container is not running' && docker compose logs app && exit 1)"
-          ssh "$VPS_USER@$VPS_HOST" "cd '$PROJECT_DIR' && docker compose ps | grep -q 'contact-scraper-redis-v2.*Up' && echo 'Redis container is running' || (echo 'Error: Redis container is not running' && docker compose logs redis && exit 1)"
-          echo "Deployment verified successfully!"
+          # Wait for containers to start
+          echo "⏱ Waiting 20 seconds for containers to fully start..."
+          sleep 10
+
+          # Verify contact-scraper app
+          ssh "$VPS_USER@$VPS_HOST" "
+            cd '$PROJECT_DIR'
+            if docker compose ps | grep -q 'contact-scraper.*Up'; then
+              echo '✅ App container is running'
+            else
+              echo '❌ Error: App container is not running'
+              docker compose logs app
+              exit 1
+            fi
+          "
+
+          # Verify Redis container
+          ssh "$VPS_USER@$VPS_HOST" "
+            cd '$PROJECT_DIR'
+            if docker compose ps | grep -q 'contact-scraper-redis.*Up'; then
+              echo '✅ Redis container is running'
+            else
+              echo '❌ Error: Redis container is not running'
+              docker compose logs redis
+              exit 1
+            fi
+          "
+
+          echo "✅ Deployment verified successfully!"
