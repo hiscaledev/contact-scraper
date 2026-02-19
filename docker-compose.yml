@@ -1,7 +1,7 @@
 services:
   redis:
     image: redis:8.4.0-alpine
-    container_name: contact-scraper-redis-v2
+    container_name: contact-scraper-redis
     ports:
       - "6380:6379"
     volumes:
@@ -21,41 +21,56 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: contact-scraper-v2
+    container_name: contact-scraper
+    # Optional local port mapping, Traefik will handle SSL routing
     ports:
-      - "8001:8000"
+      - "8000:8000"
     volumes:
       - .:/app 
     environment:
-      # Python Settings
       PYTHONUNBUFFERED: 1
       
-      # Redis Settings (override for Docker network)
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_DB: ${REDIS_DB:-0}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       CACHE_TTL: ${CACHE_TTL:-86400}
       
-      # API Security
       API_KEYS: ${API_KEYS}
       
-      # OpenAI Settings
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
       
-      # Supabase Settings
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_KEY: ${SUPABASE_KEY}
       SUPABASE_BUCKET: ${SUPABASE_BUCKET:-contact-scraper}
       
-      # Application Settings
       DEBUG: ${DEBUG:-False}
       MAX_WORKERS: ${MAX_WORKERS:-2}
     env_file:
       - .env
     depends_on:
       - redis
+    labels:
+      # Traefik routing
+      - traefik.enable=true
+      - traefik.http.routers.contact-scraper.rule=Host(`scraper.hiscale.ai`)
+      - traefik.http.routers.contact-scraper.entrypoints=websecure
+      - traefik.http.routers.contact-scraper.tls=true
+      - traefik.http.routers.contact-scraper.tls.certresolver=mytlschallenge
+      # Optional security headers like n8n
+      - traefik.http.middlewares.contact-scraper-headers.headers.SSLRedirect=true
+      - traefik.http.middlewares.contact-scraper-headers.headers.STSSeconds=315360000
+      - traefik.http.middlewares.contact-scraper-headers.headers.browserXSSFilter=true
+      - traefik.http.middlewares.contact-scraper-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.contact-scraper-headers.headers.forceSTSHeader=true
+      - traefik.http.routers.contact-scraper.middlewares=contact-scraper-headers@docker
+    networks:
+      - hiscale   # attaches to the same network as n8n Traefik
 
 volumes:
   redis_data:
+
+networks:
+  hiscale:
+    external: true   # uses existing n8n Traefik network
