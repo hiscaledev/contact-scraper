@@ -10,6 +10,7 @@ An API service that scrapes websites to extract contact information (emails, pho
 - [Project structure](#project-structure)
 - [Architecture](#architecture)
 - [API overview](#api-overview)
+- [n8n Integration](#n8n-integration)
 - [Common troubleshooting](#common-troubleshooting)
 - [Notes](#notes)
 
@@ -214,6 +215,7 @@ At a glance, the system combines FastAPI for HTTP endpoints, Redis for caching, 
 - GET `/scrap` — Scrape a website for contacts
   - Query params: `website` (required), `validate_linkedin` (optional, default `false`)
   - Header: `X-API-Key` if `API_KEYS` configured
+  - **Average response time: 10-30 seconds** (includes AI processing)
 - POST `/csv/upload-csv` — Upload CSV for batch scraping
   - Form fields: `file` (CSV), `website_column` (default `website`)
   - Returns `job_id` and initial stats
@@ -221,7 +223,54 @@ At a glance, the system combines FastAPI for HTTP endpoints, Redis for caching, 
 - GET `/csv/download/{job_id}` — Signed URL for processed CSV
 - GET `/csv/jobs` — Paginated job list (optional `status`, `limit` filters)
 
+## n8n Integration
+
+When using the `/scrap` endpoint with n8n HTTP Request node, **you must increase the timeout** as the scraping process involves multiple AI calls and website fetches.
+
+### Recommended n8n Configuration
+
+```json
+{
+  "parameters": {
+    "url": "https://scraper.hiscale.ai/scrap",
+    "sendQuery": true,
+    "queryParameters": {
+      "parameters": [
+        {
+          "name": "website",
+          "value": "example.com"
+        }
+      ]
+    },
+    "sendHeaders": true,
+    "headerParameters": {
+      "parameters": [
+        {
+          "name": "X-API-Key",
+          "value": "your-api-key-here"
+        }
+      ]
+    },
+    "options": {
+      "timeout": 60000
+    }
+  }
+}
+```
+
+**Key settings:**
+- **`timeout: 60000`** (60 seconds) - Required for AI processing
+- Default 10-second timeout will cause the request to spin endlessly or fail
+- The endpoint typically responds in 10-30 seconds depending on website complexity
+
 ## Common troubleshooting
+
+- **n8n HTTP node spinning endlessly**
+  - Symptom: Request never completes in n8n, but works with curl/Python
+  - **Fix 1**: The API now includes `Connection: close` header via middleware to ensure proper response completion
+  - **Fix 2**: Increase timeout to `60000` (60 seconds) in n8n HTTP Request node options
+  - Reason: Scraping involves multiple HTTP requests + 2 OpenAI API calls (~10-30 seconds total)
+  - Technical: n8n may not properly detect response completion without explicit `Connection: close` header
 
 - Missing API key
   - Symptom: 401/403 errors
