@@ -1,6 +1,5 @@
 """Contact Scraper API - Main application entry point."""
-
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -21,8 +20,18 @@ app = FastAPI(
 class ResponseCleanupMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        # Ensure Connection: close header for proper response completion
+
+        # Force synchronous response for n8n compatibility
         response.headers["Connection"] = "close"
+        response.headers["Keep-Alive"] = "timeout=0, max=0"
+        response.headers["X-Accel-Buffering"] = "no"
+
+        # Ensure Content-Length is set (disable chunked transfer)
+        if hasattr(response, "body"):
+            body = response.body
+            if body and not response.headers.get("Content-Length"):
+                response.headers["Content-Length"] = str(len(body))
+
         return response
 
 

@@ -21,5 +21,5 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Command to run the application directly with Python (no UV wrapper)
-# Added timeout-keep-alive and limit-concurrency to prevent n8n hanging issues
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-keep-alive", "5", "--limit-concurrency", "100"]
+# Disable keep-alive completely for n8n compatibility
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-keep-alive", "0", "--limit-concurrency", "100", "--no-access-log"]

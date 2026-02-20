@@ -75,14 +75,8 @@ def scrape_contact(
         skip_contact_page=skip_contact_page,
     )
 
-    # Return explicit JSONResponse with proper headers to fix n8n hanging issue
-    return JSONResponse(
-        content=result.model_dump(),
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "Connection": "close",
-        },
-    )
+    # Return plain dict for n8n compatibility (FastAPI will handle serialization)
+    return result
 
 
 @router.get(
@@ -121,11 +115,5 @@ def scrape_linkedin(
     """
     result = scrape_linkedin_only(website)
 
-    # Return explicit JSONResponse with proper headers
-    return JSONResponse(
-        content=result.model_dump(),
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "Connection": "close",
-        },
-    )
+    # Return plain response (FastAPI will handle serialization)
+    return result
