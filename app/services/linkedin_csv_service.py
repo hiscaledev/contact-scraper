@@ -1,8 +1,7 @@
-"""CSV processing service for background jobs."""
+"""LinkedIn-only CSV processing service for background jobs with concurrent scraping."""
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -10,11 +9,10 @@ import pandas as pd
 from app.core.config import get_settings
 from app.core.database import (
     create_job,
-    get_job_status,
     increment_job_progress,
     update_job_status,
 )
-from app.services.contact_service import scrape_website
+from app.services.linkedin_service import scrape_linkedin_only
 from app.services.storage_service import (
     download_csv_from_storage,
     upload_csv_to_storage,
@@ -24,11 +22,11 @@ from app.services.worker_service import submit_csv_job
 settings = get_settings()
 
 
-def process_csv_background(
+def process_linkedin_csv_background(
     job_id: int, input_path: str, original_filename: str, website_column: str
 ) -> None:
     """
-    Process CSV file in the background.
+    Process CSV file for LinkedIn-only scraping in the background with concurrent requests.
 
     Args:
         job_id: Unique job identifier (integer primary key)
@@ -38,27 +36,29 @@ def process_csv_background(
     """
     try:
         # Update status to processing
-        print(f"[Job {job_id}] Starting CSV processing")
+        print(f"[LinkedIn Job {job_id}] Starting CSV processing")
         update_job_status(job_id, status="processing")
 
         # Download CSV from Supabase storage
-        print(f"[Job {job_id}] Downloading CSV from storage: {input_path}")
+        print(f"[LinkedIn Job {job_id}] Downloading CSV from storage: {input_path}")
         csv_content = download_csv_from_storage(input_path)
         if not csv_content:
-            print(f"[Job {job_id}] Failed to download CSV from storage")
+            print(f"[LinkedIn Job {job_id}] Failed to download CSV from storage")
             update_job_status(
                 job_id, status="failed", error="Failed to download CSV from storage"
             )
             return
 
-        print(f"[Job {job_id}] CSV downloaded successfully")
+        print(f"[LinkedIn Job {job_id}] CSV downloaded successfully")
         # Read CSV
         df = pd.read_csv(pd.io.common.BytesIO(csv_content))
-        print(f"[Job {job_id}] CSV loaded: {len(df)} rows, {len(df.columns)} columns")
+        print(
+            f"[LinkedIn Job {job_id}] CSV loaded: {len(df)} rows, {len(df.columns)} columns"
+        )
 
         # Validate website column exists
         if website_column not in df.columns:
-            print(f"[Job {job_id}] Error: Column '{website_column}' not found")
+            print(f"[LinkedIn Job {job_id}] Error: Column '{website_column}' not found")
             update_job_status(
                 job_id,
                 status="failed",
@@ -66,18 +66,11 @@ def process_csv_background(
             )
             return
 
-        print(f"[Job {job_id}] Adding result columns to CSV")
-        # Add result columns
+        print(f"[LinkedIn Job {job_id}] Adding LinkedIn result columns to CSV")
+        # Add LinkedIn-specific result columns (only 2 columns)
+        df["company_linkedin"] = ""
+        df["personal_linkedin"] = ""
         df["scrape_status"] = ""
-        df["raw_json_response"] = ""
-        df["email1"] = ""
-        df["email2"] = ""
-        df["email3"] = ""
-        df["phone1"] = ""
-        df["phone2"] = ""
-        df["phone3"] = ""
-        df["company_linkedin_url"] = ""
-        df["personal_linkedin_url"] = ""
 
         # Add error column only in debug mode
         if settings.debug:
@@ -86,7 +79,7 @@ def process_csv_background(
         # Get concurrent workers setting (default 10)
         concurrent_workers = getattr(settings, "csv_concurrent_workers", 10)
         print(
-            f"[Job {job_id}] Processing {len(df)} rows with {concurrent_workers} concurrent workers"
+            f"[LinkedIn Job {job_id}] Processing {len(df)} rows with {concurrent_workers} concurrent workers"
         )
 
         def process_single_row(index, website):
@@ -100,32 +93,29 @@ def process_csv_background(
                 }
 
             try:
-                print(f"[Job {job_id}] Processing row {index + 1}: {website}")
-                result = scrape_website(str(website).strip())
-
-                # Convert result to dict for JSON storage
-                result_dict = result.model_dump()
+                print(f"[LinkedIn Job {job_id}] Processing row {index + 1}: {website}")
+                result = scrape_linkedin_only(str(website).strip())
 
                 row_data = {
                     "index": index,
-                    "raw_json_response": json.dumps(result_dict),
                     "scrape_status": result.status,
-                    "emails": result.emails if hasattr(result, "emails") else [],
-                    "phones": result.phones if hasattr(result, "phones") else [],
-                    "linkedin_urls": result.linkedin_urls
-                    if hasattr(result, "linkedin_urls")
-                    else {},
+                    "company_linkedin": result.company_linkedin
+                    if hasattr(result, "company_linkedin")
+                    else [],
+                    "personal_linkedin": result.personal_linkedin
+                    if hasattr(result, "personal_linkedin")
+                    else [],
                     "error": result.error if hasattr(result, "error") else None,
                     "failed": False,
                 }
 
                 print(
-                    f"[Job {job_id}] Row {index + 1} processed successfully: {result.status}"
+                    f"[LinkedIn Job {job_id}] Row {index + 1} processed successfully: {result.status}"
                 )
                 return row_data
 
             except Exception as e:
-                print(f"[Job {job_id}] Error processing row {index + 1}: {e}")
+                print(f"[LinkedIn Job {job_id}] Error processing row {index + 1}: {e}")
                 return {
                     "index": index,
                     "scrape_status": "error",
@@ -152,39 +142,17 @@ def process_csv_background(
                         "scrape_status", "error"
                     )
 
-                    if "raw_json_response" in row_data:
-                        df.at[index, "raw_json_response"] = row_data[
-                            "raw_json_response"
-                        ]
+                    # Store LinkedIn URLs in 2 columns (comma-separated if multiple)
+                    if "company_linkedin" in row_data and row_data["company_linkedin"]:
+                        company_urls = row_data["company_linkedin"]
+                        df.at[index, "company_linkedin"] = ", ".join(company_urls)
 
-                    # Store emails in separate columns
-                    if "emails" in row_data and row_data["emails"]:
-                        for i, email in enumerate(
-                            row_data["emails"][:3]
-                        ):  # Max 3 emails
-                            df.at[index, f"email{i + 1}"] = email
-
-                    # Store phones in separate columns
-                    if "phones" in row_data and row_data["phones"]:
-                        for i, phone in enumerate(
-                            row_data["phones"][:3]
-                        ):  # Max 3 phones
-                            df.at[index, f"phone{i + 1}"] = phone
-
-                    # Store LinkedIn URLs
-                    if "linkedin_urls" in row_data and row_data["linkedin_urls"]:
-                        company_urls = row_data["linkedin_urls"].get("company", [])
-                        personal_urls = row_data["linkedin_urls"].get("personal", [])
-
-                        # Store first company URL in dedicated column
-                        if company_urls:
-                            df.at[index, "company_linkedin_url"] = company_urls[0]
-
-                        # Store all personal URLs in personal_linkedin_url column
-                        if personal_urls:
-                            df.at[index, "personal_linkedin_url"] = ", ".join(
-                                personal_urls
-                            )
+                    if (
+                        "personal_linkedin" in row_data
+                        and row_data["personal_linkedin"]
+                    ):
+                        personal_urls = row_data["personal_linkedin"]
+                        df.at[index, "personal_linkedin"] = ", ".join(personal_urls)
 
                     # Store error only in debug mode
                     if settings.debug and row_data.get("error"):
@@ -194,32 +162,36 @@ def process_csv_background(
                     increment_job_progress(job_id, failed=row_data.get("failed", False))
 
                 except Exception as e:
-                    print(f"[Job {job_id}] Error processing future result: {e}")
+                    print(
+                        f"[LinkedIn Job {job_id}] Error processing future result: {e}"
+                    )
                     index = future_to_row[future]
                     df.at[index, "scrape_status"] = "error"
                     if settings.debug:
                         df.at[index, "error"] = str(e)
                     increment_job_progress(job_id, failed=True)
 
-        print(f"[Job {job_id}] All rows processed, saving output CSV")
+        print(f"[LinkedIn Job {job_id}] All rows processed, saving output CSV")
         # Save processed CSV to bytes
         output_buffer = pd.io.common.BytesIO()
         df.to_csv(output_buffer, index=False)
         output_content = output_buffer.getvalue()
 
         # Upload processed CSV to Supabase storage
-        print(f"[Job {job_id}] Uploading processed CSV to storage")
+        print(f"[LinkedIn Job {job_id}] Uploading processed CSV to storage")
         output_path = upload_csv_to_storage(
             job_id, output_content, original_filename, is_output=True
         )
 
         if output_path:
-            print(f"[Job {job_id}] Output CSV uploaded to storage: {output_path}")
-            print(f"[Job {job_id}] Job completed successfully")
+            print(
+                f"[LinkedIn Job {job_id}] Output CSV uploaded to storage: {output_path}"
+            )
+            print(f"[LinkedIn Job {job_id}] Job completed successfully")
             # Mark as completed and store output path
             update_job_status(job_id, status="completed", output_path=output_path)
         else:
-            print(f"[Job {job_id}] Failed to upload output CSV")
+            print(f"[LinkedIn Job {job_id}] Failed to upload output CSV")
             update_job_status(
                 job_id,
                 status="failed",
@@ -227,15 +199,15 @@ def process_csv_background(
             )
 
     except Exception as e:
-        print(f"[Job {job_id}] Fatal error: {e}")
+        print(f"[LinkedIn Job {job_id}] Fatal error: {e}")
         update_job_status(job_id, status="failed", error=str(e))
 
 
-def start_csv_processing(
+def start_linkedin_csv_processing(
     csv_content: bytes, original_filename: str, website_column: str = "website"
 ) -> Optional[int]:
     """
-    Start processing a CSV file in a background worker.
+    Start processing a CSV file for LinkedIn-only scraping in a background worker.
 
     Args:
         csv_content: CSV file content as bytes
@@ -245,45 +217,49 @@ def start_csv_processing(
     Returns:
         The job ID (integer) if successful, None otherwise
     """
-    print(f"[CSV Upload] Processing file: {original_filename}")
+    print(f"[LinkedIn CSV Upload] Processing file: {original_filename}")
     # Read CSV to get row count first
     df = pd.read_csv(pd.io.common.BytesIO(csv_content))
     total_rows = len(df)
-    print(f"[CSV Upload] CSV contains {total_rows} rows")
+    print(f"[LinkedIn CSV Upload] CSV contains {total_rows} rows")
 
     # Create job in database first to get the auto-generated ID
-    print(f"[CSV Upload] Creating job in database")
+    print(f"[LinkedIn CSV Upload] Creating job in database")
     job_id = create_job(total_rows, None, original_filename)
 
     if not job_id:
-        print(f"[CSV Upload] Failed to create job in database")
+        print(f"[LinkedIn CSV Upload] Failed to create job in database")
         return None
 
-    print(f"[CSV Upload] Job created with ID: {job_id}")
+    print(f"[LinkedIn CSV Upload] Job created with ID: {job_id}")
 
     # Upload CSV to Supabase storage with the job ID
-    print(f"[CSV Upload] Uploading CSV to storage")
+    print(f"[LinkedIn CSV Upload] Uploading CSV to storage")
     input_path = upload_csv_to_storage(
         job_id, csv_content, original_filename, is_output=False
     )
 
     if not input_path:
-        print(f"[Job {job_id}] Failed to upload CSV to storage")
+        print(f"[LinkedIn Job {job_id}] Failed to upload CSV to storage")
         update_job_status(
             job_id, status="failed", error="Failed to upload CSV to storage"
         )
         return None
 
-    print(f"[Job {job_id}] CSV uploaded to storage: {input_path}")
+    print(f"[LinkedIn Job {job_id}] CSV uploaded to storage: {input_path}")
 
     # Update job with input path
     update_job_status(job_id, input_path=input_path)
 
     # Submit job to worker pool (max 2 concurrent jobs)
-    print(f"[Job {job_id}] Submitting to worker pool")
+    print(f"[LinkedIn Job {job_id}] Submitting to worker pool")
     submit_csv_job(
-        process_csv_background, job_id, input_path, original_filename, website_column
+        process_linkedin_csv_background,
+        job_id,
+        input_path,
+        original_filename,
+        website_column,
     )
 
-    print(f"[Job {job_id}] Job queued successfully for {total_rows} rows")
+    print(f"[LinkedIn Job {job_id}] Job queued successfully for {total_rows} rows")
     return job_id

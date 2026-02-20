@@ -16,6 +16,8 @@ services:
       '
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    networks:
+      - hiscale
 
   app:
     build:
@@ -26,27 +28,28 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app 
+      - .:/app
     environment:
       PYTHONUNBUFFERED: 1
-      
+
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_DB: ${REDIS_DB:-0}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       CACHE_TTL: ${CACHE_TTL:-86400}
-      
+
       API_KEYS: ${API_KEYS}
-      
+
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
-      
+
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_KEY: ${SUPABASE_KEY}
       SUPABASE_BUCKET: ${SUPABASE_BUCKET:-contact-scraper}
-      
+
       DEBUG: ${DEBUG:-False}
       MAX_WORKERS: ${MAX_WORKERS:-2}
+      CSV_CONCURRENT_WORKERS: ${CSV_CONCURRENT_WORKERS:-10}
     env_file:
       - .env
     depends_on:
@@ -66,11 +69,11 @@ services:
       - traefik.http.middlewares.contact-scraper-headers.headers.forceSTSHeader=true
       - traefik.http.routers.contact-scraper.middlewares=contact-scraper-headers@docker
     networks:
-      - hiscale   # attaches to the same network as n8n Traefik
+      - hiscale # attaches to the same network as n8n Traefik
 
 volumes:
   redis_data:
 
 networks:
   hiscale:
-    external: true   # uses existing n8n Traefik network
+    external: true # uses existing n8n Traefik network

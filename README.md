@@ -112,6 +112,7 @@ Key variables:
 - SUPABASE_BUCKET: Storage bucket name (default: `contact-scraper`)
 - DEBUG: Enables verbose logging and adds an `error` column in CSV output
 - MAX_WORKERS: Max concurrent CSV jobs in worker pool (default: 2)
+- CSV_CONCURRENT_WORKERS: Concurrent website scraping within each CSV job (default: 10)
 - CACHE_TTL: Cache TTL seconds for website results (default: 86400)
 
 ## Project structure
@@ -211,28 +212,51 @@ At a glance, the system combines FastAPI for HTTP endpoints, Redis for caching, 
 
 ## API overview
 
+### Contact Scraping Endpoints
+
 - GET `/` — Health check
-- GET `/scrap` — Scrape a website for contacts
-  - Query params: `website` (required), `validate_linkedin` (optional, default `false`)
+- GET `/scrap` — Scrape a website for full contacts (emails, phones, LinkedIn)
+  - Query params: 
+    - `website` (required)
+    - `validate_linkedin` (optional, default `false`)
+    - `skip_contact_page` (optional, default `false`) - Skip AI contact page detection for faster results
   - Header: `X-API-Key` if `API_KEYS` configured
-  - **Average response time: 10-30 seconds** (includes AI processing)
-- POST `/csv/upload-csv` — Upload CSV for batch scraping
+  - **Average response time: 5-15 seconds** (with `skip_contact_page=true`), **10-30 seconds** (full scan)
+- GET `/scrap-linkedin` — **NEW** Scrape LinkedIn URLs only (fast, no AI)
+  - Query params: `website` (required)
+  - Header: `X-API-Key` if `API_KEYS` configured
+  - **Average response time: 2-5 seconds** (homepage only, no AI validation)
+  - Returns only `company_linkedin` and `personal_linkedin` arrays
+  - **Uses separate cache** from full contact scraping (cache key: `linkedin:{url}`)
+
+### CSV Batch Processing Endpoints
+
+- POST `/csv/upload-csv` — Upload CSV for batch full contact scraping
   - Form fields: `file` (CSV), `website_column` (default `website`)
   - Returns `job_id` and initial stats
+  - Output: emails, phones, LinkedIn URLs
+  - **Processing:** 10 concurrent requests per job (configurable via `CSV_CONCURRENT_WORKERS`)
+- POST `/csv/upload-linkedin-csv` — **NEW** Upload CSV for batch LinkedIn-only scraping
+  - Form fields: `file` (CSV), `website_column` (default `website`)
+  - Returns `job_id` and initial stats
+  - Output: **Only 2 new columns**: `company_linkedin` and `personal_linkedin` (comma-separated if multiple)
+  - **Much faster**: 2-5 seconds per row (vs 10-30 seconds for full scraping)
+  - **Processing:** 10 concurrent requests per job (configurable via `CSV_CONCURRENT_WORKERS`)
 - GET `/csv/job/{job_id}` — Job status
 - GET `/csv/download/{job_id}` — Signed URL for processed CSV
 - GET `/csv/jobs` — Paginated job list (optional `status`, `limit` filters)
 
 ## n8n Integration
 
-When using the `/scrap` endpoint with n8n HTTP Request node, **you must increase the timeout** as the scraping process involves multiple AI calls and website fetches.
+### LinkedIn-Only Endpoint (Recommended for n8n)
 
-### Recommended n8n Configuration
+For fastest results with n8n, use the `/scrap-linkedin` endpoint:
 
 ```json
 {
   "parameters": {
-    "url": "https://scraper.hiscale.ai/scrap",
+    "method": "GET",
+    "url": "https://scraper.hiscale.ai/scrap-linkedin",
     "sendQuery": true,
     "queryParameters": {
       "parameters": [
@@ -252,33 +276,140 @@ When using the `/scrap` endpoint with n8n HTTP Request node, **you must increase
       ]
     },
     "options": {
-      "timeout": 60000
+      "timeout": 15000
+    }
+  }
+}
+```
+
+**Benefits:**
+- **Response time: 2-5 seconds** (much faster than full scraping)
+- Only 15-second timeout needed
+- No AI processing (instant results)
+- Returns only `company_linkedin` and `personal_linkedin` arrays (cleaner response)
+- **Separate cache** (won't interfere with full contact scraping)
+- Perfect for high-volume scraping in n8n workflows
+
+### Full Contact Scraping Configuration
+
+When using the `/scrap` endpoint with n8n HTTP Request node, **you must increase the timeout** as the scraping process involves multiple AI calls and website fetches.
+
+#### Recommended n8n Configuration
+
+```json
+{
+  "parameters": {
+    "url": "https://scraper.hiscale.ai/scrap",
+    "sendQuery": true,
+    "queryParameters": {
+      "parameters": [
+        {
+          "name": "website",
+          "value": "example.com"
+        },
+        {
+          "name": "skip_contact_page",
+          "value": "true"
+        }
+      ]
+    },
+    "sendHeaders": true,
+    "headerParameters": {
+      "parameters": [
+        {
+          "name": "X-API-Key",
+          "value": "your-api-key-here"
+        }
+      ]
+    },
+    "options": {
+      "timeout": 60000,
+      "redirect": {
+        "followRedirects": true,
+        "maxRedirects": 5
+      }
     }
   }
 }
 ```
 
 **Key settings:**
-- **`timeout: 60000`** (60 seconds) - Required for AI processing
-- Default 10-second timeout will cause the request to spin endlessly or fail
-- The endpoint typically responds in 10-30 seconds depending on website complexity
+
+- **`timeout: 60000`** (60 seconds) - Required for AI processing (can use 30000ms if `skip_contact_page=true`)
+- **`skip_contact_page: true`** - Recommended for n8n to get faster results (5-15 seconds vs 10-30 seconds)
+- Default 10-second timeout will cause timeout errors
+- The endpoint typically responds in:
+  - **5-15 seconds** with `skip_contact_page=true` (fast mode - homepage only)
+  - **10-30 seconds** with full contact page detection (more comprehensive)
+
+### Endpoint Comparison for n8n
+
+| Endpoint | Response Time | AI Used | Cache | Returns | Best For |
+|----------|---------------|---------|-------|---------|----------|
+| `/scrap-linkedin` | 2-5 seconds | ❌ No | Separate (`linkedin:*`) | LinkedIn URLs only | **Recommended for n8n** - High-volume workflows |
+| `/scrap?skip_contact_page=true` | 5-15 seconds | ✅ Yes (validation) | Shared (`contact:*`) | Emails, phones, LinkedIn | Need all contact types quickly |
+| `/scrap` (full) | 10-30 seconds | ✅ Yes (detection + validation) | Shared (`contact:*`) | Emails, phones, LinkedIn (comprehensive) | Most complete data |
+
+### CSV Batch Processing for LinkedIn
+
+Use `/csv/upload-linkedin-csv` for batch LinkedIn scraping:
+
+```bash
+# Upload CSV with website column
+curl -X POST "https://scraper.hiscale.ai/csv/upload-linkedin-csv" \
+  -H "X-API-Key: your-api-key-here" \
+  -F "file=@websites.csv" \
+  -F "website_column=website"
+
+# Response: {"job_id": "123", "message": "LinkedIn-only processing queued", "total_rows": 100}
+
+# Check status
+curl "https://scraper.hiscale.ai/csv/job/123" \
+  -H "X-API-Key: your-api-key-here"
+
+# Download results when completed
+curl "https://scraper.hiscale.ai/csv/download/123" \
+  -H "X-API-Key: your-api-key-here"
+```
+
+**Output CSV columns:**
+- `company_linkedin` - Comma-separated list of company LinkedIn URLs
+- `personal_linkedin` - Comma-separated list of personal LinkedIn URLs
+- `scrape_status` (success, error, no_contacts_found, skipped)
+- `error` (only in DEBUG mode)
+
+**Performance:**
+- **10 concurrent requests** within each CSV job (default)
+- Example: 100 rows with 10 concurrent workers = ~30-50 seconds (vs 5-8 minutes sequential)
+- Configurable via `CSV_CONCURRENT_WORKERS` environment variable
 
 ## Common troubleshooting
 
-- **n8n HTTP node spinning endlessly**
-  - Symptom: Request never completes in n8n, but works with curl/Python
-  - **Fix 1**: The API now includes `Connection: close` header via middleware to ensure proper response completion
-  - **Fix 2**: Increase timeout to `60000` (60 seconds) in n8n HTTP Request node options
-  - Reason: Scraping involves multiple HTTP requests + 2 OpenAI API calls (~10-30 seconds total)
-  - Technical: n8n may not properly detect response completion without explicit `Connection: close` header
+- **LinkedIn-only scraping returns empty, but full scraping works**
+  - Reason: `/scrap-linkedin` and `/scrap` use **separate caches**
+  - LinkedIn-only cache key: `linkedin:{url}`
+  - Full contact cache key: `contact:{url}`
+  - This is intentional to prevent cache conflicts
+  - If you scrape LinkedIn-only first, then full scraping will still work correctly
+
+- **n8n HTTP node spinning endlessly or timing out**
+  - Symptom: Request never completes in n8n, or times out with "timeout exceeded" error
+  - **Fix 1**: Add `skip_contact_page=true` query parameter for faster results (5-15 seconds)
+  - **Fix 2**: Increase timeout to `60000` (60 seconds) in n8n options, or `30000` (30 seconds) if using `skip_contact_page=true`
+  - **Fix 3**: Ensure Redis is properly connected (check `docker compose logs app` for Redis errors)
+  - Technical: The API includes `Connection: close` header to ensure proper response completion
+  - Reason: Full scraping involves multiple HTTP requests + 2 OpenAI API calls (~10-30 seconds total)
 
 - Missing API key
   - Symptom: 401/403 errors
   - Fix: Set `API_KEYS` in `.env` and pass `X-API-Key` header; or leave `API_KEYS` empty in dev
 
-- Redis host mismatch
-  - Symptom: Cache errors / connection refused
-  - Fix: In Docker set `REDIS_HOST=redis`; locally use `REDIS_HOST=localhost`
+- Redis connection errors / Cache not working
+  - Symptom: `Error connecting to redis` in logs, repeated scraping takes same time as first request
+  - Fix 1: Ensure Redis and app are on the same Docker network (both should be on `hiscale` network)
+  - Fix 2: In Docker set `REDIS_HOST=redis`; locally use `REDIS_HOST=localhost`
+  - Fix 3: Check both containers are running: `docker compose ps`
+  - Fix 4: Test Redis connection: `docker exec contact-scraper python -c "import redis; redis.Redis(host='redis').ping()"`
 
 - Supabase credentials or bucket issues
   - Symptom: Job creation/storage fails; 500 errors on upload/download

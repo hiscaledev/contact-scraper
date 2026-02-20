@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     # OpenAI Settings
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
-    openai_timeout: int = 30  # OpenAI API timeout in seconds
-    request_timeout: int = 15  # HTTP request timeout for fetching pages
+    openai_timeout: int = 20  # OpenAI API timeout in seconds
+    request_timeout: int = 10  # HTTP request timeout for fetching pages
 
     # Supabase Settings
     supabase_url: str = ""
@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # Worker Pool Settings
     max_workers: int = 2  # Maximum concurrent jobs
+    csv_concurrent_workers: int = 10  # Concurrent requests within each CSV job
 
     class Config:
         env_file = ".env"
